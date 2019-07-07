@@ -14,16 +14,16 @@ tags:
 
 #### 0x01 引言
 
-本文简单介绍了一种 Man-in-the-middle 的 DNS 攻击方法。在中间设备上通过 iptables 捕获 DNS Packet，然后使用 Scapy 来修改 DNS 的 Resource Record， 以此来实现 DNS 污染。
+本文简单介绍了一种 Man-in-the-middle 的 DNS 攻击方法。在中间路由设备上通过 iptables 捕获 DNS 数据包，然后使用 Scapy 来修改响应中的资源记录， 以此来实现 DNS 污染。
 
 
 #### 0x02 测试环境拓扑 
 
 准备三台虚机，分别是以下 IP
 
-    Node1: 192.168.129.107  # client
-    Node2：192.168.129.112  # router
-    Node3：192.168.129.113  # dns server 
+    Node1: 192.168.129.107  # client，作为DNS请求发起端
+    Node2：192.168.129.112  # router，中间路由设备
+    Node3：192.168.129.113  # server，DNS 服务器
 
 ![Deployment Image](/img/in-post/post-dns-spoof/DNS_SPOOF.jpg)
  
@@ -58,32 +58,47 @@ Node2 作为中间路由器, 需要打开 `ipv4_forward`, 并在 Node1 和 Node3
     08:44:29.642918 IP 192.168.129.113.domain > 192.168.129.107.37559: 63650 3/0/1 CNAME www.a.shifen.com., A 115.239.211.112, A 115.239.210.27 (101)
 
 
-#### 0x03 修改 DNS 应答报文 
+#### 0x03 捕获 DNS 数据包
 
-node2 上添加一条iptables 规则， 使所有 DNS Response Packet 都进入 `nfqueue 0` 中 
+想要修改数据包，首先必须要能获取到它。在这里我们使用了 `iptables` 的 `nfqueue`， 它可以将数据包从内核空间拷贝到用户空间，在用户空间对其修改后重新发送。
+
+先在 node2 上添加一条 iptables 规则， 使所有 DNS Response Packet 都进入 `nfqueue 0` 中。  
 
     
     root@node2:/# iptables -t filter -I FORWARD 1 -p udp --sport 53 -j NFQUEUE --queue-num 0
 
 
-安装`netfilterQueue`的底层依赖 `libnfnetlink`, 从 https://netfilter.org/projects/ 下载。
+[Python NetfilterQueue](https://pypi.org/project/NetfilterQueue) 十分容易上手，根据其基础教程很容易就能完成我们的第一次数据包的捕获。  
 
-#### [libnfnetlink](https://netfilter.org/projects/libnfnetlink/index.html)
+    # 安装依赖
+    apt-get install build-essential python-dev libnetfilter-queue-dev  
+    pip install NetfilterQueue  
 
-> `libnfnetlink` is the low-level library for netfilter related kernel/userspace communication. It provides a generic messaging infrastructure for in-kernel netfilter subsystems(nfnetlink_log, nfnetlink_queue, nfnetlink_conntrack).  
-This library is not meant as a public API for application developers. It's only used by other netfilter.org projects.  
 
-简而言之就是为其他netfilter项目提供底层的消息基础设施  
+    # 捕获并打印数据包
+    from netfilterqueue import NetfilterQueue
+    
+    def print_and_accept(pkt):
+        print(pkt)
+        pkt.accept()
+    
+    nfqueue = NetfilterQueue()
+    nfqueue.bind(0, print_and_accept)
+    try:
+        nfqueue.run()
+    except KeyboardInterrupt:
+        print('')
+    
+    nfqueue.unbind()
 
-#### [libnetfilter_queue](https://netfilter.org/projects/libnetfilter_queue/)
+#### 0x04 修改 DNS 响应
 
-> It is a userspace library providing an API to packets that have queued by the kernel packet filter. 
 
-提供从 kernel nfnetlink_queue 中获取 packet 的接口， 并可以修改包并重新入队  
+捕获到数据包之后，接下来就是修改其内容。Netifilter Packet 对象提供了 `get_payload()` 方法用来获取数据包原始的二进制数据，
+但我们不可能直接对二进制数据进行修改，所以就轮到 Scapy 登场了。   
 
----
-
-以下为 dns_ans_spoof 的源码
+[Scapy](https://scapy.readthedocs.io/en/latest/) 可以方便我们构造和修改报文，
+`scapy.IP(pkt.get_payload())` 将二进制数据 转换成 `scapy.IP` 对象
 
 
     root@node2:/# cat dns_ans_spoof.py 
@@ -131,9 +146,6 @@ This library is not meant as a public API for application developers. It's only 
         print('Exit')
     
     nfqueue.unbind()
-
-
-
 
 
 
