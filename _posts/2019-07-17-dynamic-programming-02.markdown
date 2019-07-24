@@ -29,6 +29,8 @@ $$x_i$$ : 选取物品 $$i$$ 多少次
 ### 0-1 背包问题 (0-1 knapsack problem)  
 每个物品只有两种选择，放入或不放。那么一共有 $$2^n$$ 种选择方法。 将选择的方法画成树的形式，如下图   
 
+![dp-01](/img/in-post/dynamic-problems/dp-01-tree.png)
+
 
 $$
 \begin{aligned}
@@ -36,9 +38,6 @@ $$
 &subject\enspace to \quad \sum_{i=1}^nw_ix_i \quad and \quad x_i \in \{0,1\}
 \end{aligned}
 $$
-
-
-![dp-01]('/img/in-post/dynamic-problems/dp-01-tree.png')
 
 bounded knapsack problem(BKP)  
 
